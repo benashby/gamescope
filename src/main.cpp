@@ -782,7 +782,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if ( gamescope::Process::HasCapSysNice() )
+	if ( gamescope::Process::HasCapSysNice() || gamescope::Process::HasRtprio() )
 	{
 		gamescope::Process::SetNice( -20 );
 
@@ -791,7 +791,7 @@ int main(int argc, char **argv)
 	}
 	else
 	{
-		fprintf( stderr, "No CAP_SYS_NICE, falling back to regular-priority compute and threads.\nPerformance will be affected.\n" );
+		fprintf( stderr, "No CAP_SYS_NICE or RLIMIT_RTPRIO, falling back to regular-priority compute and threads.\nPerformance will be affected.\n" );
 	}
 
 #if 0
