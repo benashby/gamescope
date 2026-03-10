@@ -418,14 +418,28 @@ namespace gamescope::Process
 #endif
     }
 
+    bool HasRtprio()
+    {
+#if defined(__linux__)
+        static bool s_bHasRtprio = []() -> bool
+        {
+            struct rlimit rl{};
+            if ( getrlimit( RLIMIT_RTPRIO, &rl ) != 0 )
+                return false;
+            return rl.rlim_cur > 0;
+        }();
+
+        return s_bHasRtprio;
+#else
+        return false;
+#endif
+    }
+
     std::optional<int> g_oOldNice;
     std::optional<int> g_oNewNice;
     void SetNice( int nNice )
     {
 #if defined(__linux__)
-        if ( !HasCapSysNice() )
-            return;
-
         errno = 0;
         int nOldNice = nice( 0 );
         if ( nOldNice != -1 || errno == 0 )
@@ -445,9 +459,6 @@ namespace gamescope::Process
     void RestoreNice()
     {
 #if defined(__linux__)
-        if ( !HasCapSysNice() )
-            return;
-
         if ( !g_oOldNice || !g_oNewNice )
             return;
 
@@ -494,7 +505,7 @@ namespace gamescope::Process
     bool SetRealtime()
     {
 #if defined(__linux__)
-        if ( !HasCapSysNice() )
+        if ( !HasCapSysNice() && !HasRtprio() )
             return false;
 
         g_oOldSchedulerInfo = SchedulerInfo::Get();
@@ -517,7 +528,7 @@ namespace gamescope::Process
     void RestoreRealtime()
     {
 #if defined(__linux__)
-        if ( !HasCapSysNice() )
+        if ( !HasCapSysNice() && !HasRtprio() )
             return;
 
         if ( !g_oOldSchedulerInfo )
