@@ -2145,15 +2145,21 @@ namespace gamescope
         else if ( SupportsFormat( DRM_FORMAT_ABGR8888 ) )
             u8BitFormat = DRM_FORMAT_ABGR8888;
 
+        // Skip 10-bit when explicit sync is disabled (Nvidia mode).
+        // Nvidia + Hyprland rejects 10-bit dmabuf imports on the Wayland backend,
+        // causing immediate wl_buffer_release and a black screen.
         uint32_t u10BitFormat = DRM_FORMAT_INVALID;
-        if ( SupportsFormat( DRM_FORMAT_XBGR2101010 ) )
-            u10BitFormat = DRM_FORMAT_XBGR2101010;
-        else if ( SupportsFormat( DRM_FORMAT_XRGB2101010 ) )
-            u10BitFormat = DRM_FORMAT_XRGB2101010;
-        else if ( SupportsFormat( DRM_FORMAT_ABGR2101010 ) )
-            u10BitFormat = DRM_FORMAT_ABGR2101010;
-        else if ( SupportsFormat( DRM_FORMAT_ARGB2101010 ) )
-            u10BitFormat = DRM_FORMAT_ARGB2101010;
+        if ( !cv_drm_debug_disable_explicit_sync )
+        {
+            if ( SupportsFormat( DRM_FORMAT_XBGR2101010 ) )
+                u10BitFormat = DRM_FORMAT_XBGR2101010;
+            else if ( SupportsFormat( DRM_FORMAT_XRGB2101010 ) )
+                u10BitFormat = DRM_FORMAT_XRGB2101010;
+            else if ( SupportsFormat( DRM_FORMAT_ABGR2101010 ) )
+                u10BitFormat = DRM_FORMAT_ABGR2101010;
+            else if ( SupportsFormat( DRM_FORMAT_ARGB2101010 ) )
+                u10BitFormat = DRM_FORMAT_ARGB2101010;
+        }
 
         assert( u8BitFormat != DRM_FORMAT_INVALID );
 
