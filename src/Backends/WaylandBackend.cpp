@@ -46,6 +46,7 @@ extern int g_nPreferredOutputHeight;
 extern bool g_bForceHDR10OutputDebug;
 extern bool g_bBorderlessOutputWindow;
 extern gamescope::ConVar<bool> cv_adaptive_sync;
+extern gamescope::ConVar<bool> cv_drm_debug_disable_explicit_sync;
 
 extern gamescope::ConVar<bool> cv_composite_force;
 extern bool g_bColorSliderInUse;
@@ -2292,7 +2293,7 @@ namespace gamescope
 
     bool CWaylandBackend::SupportsExplicitSync() const
     {
-        return true;
+        return !cv_drm_debug_disable_explicit_sync;
     }
 
     bool CWaylandBackend::IsPaused() const
