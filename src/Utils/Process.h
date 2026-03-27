@@ -35,6 +35,7 @@ namespace gamescope::Process
     pid_t SpawnProcessInWatchdog( char **argv, bool bRespawn = false, std::function<void()> fnPreambleInChild = nullptr );
 
     bool HasCapSysNice();
+    bool HasRtprio();
     void SetNice( int nNice );
     void RestoreNice();
 
