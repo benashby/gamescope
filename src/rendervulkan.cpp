@@ -2392,6 +2392,7 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, uint32_t depth, uin
 		vk_errorf( res, "vkCreateImage failed" );
 		return false;
 	}
+	m_bOwnsImage = true;
 	
 	VkMemoryRequirements memRequirements;
 	g_device.vk.GetImageMemoryRequirements(g_device.device(), m_vkImage, &memRequirements);
@@ -2814,9 +2815,10 @@ CVulkanTexture::CVulkanTexture( void )
 {
 }
 
-CVulkanTexture::~CVulkanTexture( void )
+void CVulkanTexture::ReleaseResources()
 {
 	wlr_dmabuf_attributes_finish( &m_dmabuf );
+	m_dmabuf = {};
 
 	if ( m_pMappedData != nullptr && m_vkImageMemory )
 	{
@@ -2836,22 +2838,43 @@ CVulkanTexture::~CVulkanTexture( void )
 		m_linearView = VK_NULL_HANDLE;
 	}
 
+	if ( m_lumaView != VK_NULL_HANDLE )
+	{
+		g_device.vk.DestroyImageView( g_device.device(), m_lumaView, nullptr );
+		m_lumaView = VK_NULL_HANDLE;
+	}
+
+	if ( m_chromaView != VK_NULL_HANDLE )
+	{
+		g_device.vk.DestroyImageView( g_device.device(), m_chromaView, nullptr );
+		m_chromaView = VK_NULL_HANDLE;
+	}
+
 	if ( m_pBackendFb != nullptr )
 		m_pBackendFb = nullptr;
 
+	// Images we created are destroyed even when the memory isn't ours
+	// (aliased textures, or an init that failed before allocating memory).
+	// Swapchain-owned images are never destroyed here.
+	if ( m_vkImage != VK_NULL_HANDLE && m_bOwnsImage )
+	{
+		g_device.vk.DestroyImage( g_device.device(), m_vkImage, nullptr );
+	}
+	m_vkImage = VK_NULL_HANDLE;
+	m_bOwnsImage = false;
+
 	if ( m_vkImageMemory != VK_NULL_HANDLE )
 	{
-		if ( m_vkImage != VK_NULL_HANDLE )
-		{
-			g_device.vk.DestroyImage( g_device.device(), m_vkImage, nullptr );
-			m_vkImage = VK_NULL_HANDLE;
-		}
-
 		g_device.vk.FreeMemory( g_device.device(), m_vkImageMemory, nullptr );
 		m_vkImageMemory = VK_NULL_HANDLE;
 	}
 
 	m_bInitialized = false;
+}
+
+CVulkanTexture::~CVulkanTexture( void )
+{
+	ReleaseResources();
 }
 
 int CVulkanTexture::memoryFence()

@@ -214,10 +214,17 @@ public:
 	uint32_t queueFamily = VK_QUEUE_FAMILY_IGNORED;
 
 private:
+	// Frees everything BInit may have created, so a failed init can be
+	// retried. Also used by the destructor.
+	void ReleaseResources();
+
 	bool m_bInitialized = false;
 	bool m_bExternal = false;
 	bool m_bTransferSrc = false;
 	bool m_bOutputImage = false;
+	// False for swapchain images: those are owned by the swapchain and must
+	// never be passed to vkDestroyImage.
+	bool m_bOwnsImage = false;
 
 	uint32_t m_drmFormat = DRM_FORMAT_INVALID;
 
