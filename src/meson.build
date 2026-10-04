@@ -155,7 +155,11 @@ endif
 
 gamescope_cpp_args += '-DHAVE_SYSTEMD=@0@'.format(systemd_dep.found().to_int())
 gamescope_cpp_args += '-DHAVE_DRM=@0@'.format(drm_dep.found().to_int())
-gamescope_cpp_args += '-DHAVE_GBM=@0@'.format((drm_dep.found() and gbm_dep.found()).to_int())
+have_gbm = drm_dep.found() and gbm_dep.found()
+if have_gbm
+  src += 'Backends/GbmScanoutBuffer.cpp'
+endif
+gamescope_cpp_args += '-DHAVE_GBM=@0@'.format(have_gbm.to_int())
 gamescope_cpp_args += '-DHAVE_SDL2=@0@'.format(sdl2_dep.found().to_int())
 gamescope_cpp_args += '-DHAVE_AVIF=@0@'.format(avif_dep.found().to_int())
 gamescope_cpp_args += '-DHAVE_LIBCAP=@0@'.format(cap_dep.found().to_int())

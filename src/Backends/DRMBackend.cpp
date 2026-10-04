@@ -57,6 +57,10 @@
 #include "libdisplay-info/edid.h"
 #include "wlr_end.hpp"
 
+#if HAVE_GBM
+#include "GbmScanoutBuffer.h"
+#endif
+
 #include "gamescope-control-protocol.h"
 
 extern int g_nPreferredOutputWidth;
@@ -75,6 +79,19 @@ gamescope::ConVar<bool> cv_drm_debug_disable_color_encoding( "drm_debug_disable_
 gamescope::ConVar<bool> cv_drm_debug_disable_color_range( "drm_debug_disable_color_range", false, "YUV Color Range chicken bit. (Forces COLOR_RANGE to DEFAULT, does not affect other logic)" );
 gamescope::ConVar<bool> cv_drm_debug_disable_explicit_sync( "drm_debug_disable_explicit_sync", false, "Force disable explicit sync on the DRM backend." );
 gamescope::ConVar<bool> cv_drm_debug_disable_in_fence_fd( "drm_debug_disable_in_fence_fd", false, "Force disable IN_FENCE_FD being set to avoid over-synchronization on the DRM backend." );
+
+gamescope::ConVar<bool> cv_drm_gbm_scanout( "drm_gbm_scanout", false, "Allocate scanout buffers with GBM and import them into Vulkan. Fixes corrupted scanout on the NVIDIA proprietary driver.",
+	[]( gamescope::ConVar<bool> &cvar )
+	{
+		// The callback also runs for writes of the unchanged value; only an
+		// actual toggle warrants rebuilding the output images.
+		static bool s_bLastValue = false;
+		if ( cvar == s_bLastValue )
+			return;
+		s_bLastValue = cvar;
+
+		g_bForceOutputImageRemake = true;
+	});
 
 gamescope::ConVar<bool> cv_drm_allow_dynamic_modes_for_external_display( "drm_allow_dynamic_modes_for_external_display", false, "Allow dynamic mode/refresh rate switching for external displays." );
 
@@ -113,6 +130,13 @@ struct drm_t {
 	uint64_t cursor_width, cursor_height;
 	bool allow_modifiers;
 	struct wlr_drm_format_set formats;
+
+	// GBM device on a dup of the KMS fd, for backend-allocated scanout
+	// buffers. Buffers keep the device alive via this shared_ptr; the
+	// deleter destroys the device and closes its dup'd fd, so buffer
+	// teardown stays valid even after drm->fd itself is closed.
+	std::shared_ptr<struct gbm_device> gbm;
+	bool bIsNvidia = false;
 
 	std::vector< std::unique_ptr< gamescope::CDRMPlane > > planes;
 	std::vector< std::unique_ptr< gamescope::CDRMCRTC > > crtcs;
@@ -548,10 +572,11 @@ namespace gamescope
 		~CDRMFb();
 
 		uint32_t GetFbId() const { return m_uFbId; }
-	
+
 	private:
 		uint32_t m_uFbId = 0;
 	};
+
 }
 
 uint32_t g_nDRMFormat = DRM_FORMAT_INVALID;
@@ -1567,6 +1592,28 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 		drm->allow_modifiers = true;
 	}
 
+	if ( drmVersion *pVersion = drmGetVersion( drm->fd ) )
+	{
+		drm->bIsNvidia = pVersion->name && !strcmp( pVersion->name, "nvidia-drm" );
+		drm_log.infof( "KMS driver: %s", pVersion->name ? pVersion->name : "unknown" );
+		drmFreeVersion( pVersion );
+	}
+
+#if HAVE_GBM
+	// Create the GBM device on a dup of the KMS fd so buffer teardown
+	// (gbm_bo_destroy) stays valid even after wlsession_close_kms() has
+	// closed drm->fd; textures holding GBM buffers can outlive the backend
+	// on shutdown. The deleter closes the dup'd fd after the device.
+	drm->gbm = gamescope::CreateGbmDevice( drm->fd );
+	if ( !drm->gbm )
+		drm_log.errorf( "GBM scanout buffers will be unavailable." );
+
+	if ( drm->bIsNvidia && !cv_drm_gbm_scanout )
+	{
+		drm_log.infof( "nvidia-drm detected: scanout of Vulkan-allocated buffers is known to corrupt on this driver. Consider enabling GBM scanout buffers with gamescope_drm_gbm_scanout=1." );
+	}
+#endif
+
 	g_bSupportsAsyncFlips = drmGetCap(drm->fd, DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, &cap) == 0 && cap != 0;
 	if (!g_bSupportsAsyncFlips)
 		drm_log.errorf("Immediate flips are not supported by the KMS driver");
@@ -1876,6 +1923,12 @@ void finish_drm(struct drm_t *drm)
 	drm->planes.clear();
 	drm->crtcs.clear();
 	drm->connectors.clear();
+
+	// Drop our reference to the GBM device. Outstanding scanout buffers
+	// keep it alive via their own references; the device owns a dup of the
+	// KMS fd, so late gbm_bo_destroy calls stay valid after
+	// wlsession_close_kms() below.
+	drm->gbm = nullptr;
 
 
 	// Signal the page-flip handler thread to exit and join it so it won't be
@@ -4244,6 +4297,27 @@ namespace gamescope
 		virtual OwningRc<IBackendFb> ImportDmabufToBackend( wlr_dmabuf_attributes *pDmaBuf ) override
 		{
 			return drm_fbid_from_dmabuf( &g_DRM, pDmaBuf );
+		}
+
+		virtual bool SupportsExternalScanoutBuffers() const override
+		{
+#if HAVE_GBM
+			return g_DRM.gbm != nullptr && g_DRM.allow_modifiers && cv_drm_gbm_scanout;
+#else
+			return false;
+#endif
+		}
+
+		virtual std::shared_ptr<IBackendScanoutBuffer> CreateScanoutBuffer( uint32_t uWidth, uint32_t uHeight, uint32_t uDrmFormat, std::span<const uint64_t> ulModifiers, bool bLinear ) override
+		{
+#if HAVE_GBM
+			if ( !g_DRM.gbm )
+				return nullptr;
+
+			return CreateGbmScanoutBuffer( g_DRM.gbm, uWidth, uHeight, uDrmFormat, ulModifiers, bLinear );
+#else
+			return nullptr;
+#endif
 		}
 
 		virtual bool UsesModifiers() const override
