@@ -3670,7 +3670,15 @@ static bool vulkan_make_output_images_external( VulkanOutput_t *pOutput, const C
 	if ( bOverlay )
 		uFormats[nFormats++] = pOutput->uOutputFormatOverlay;
 
-	std::vector<uint64_t> modifiers = GetExternalScanoutModifiers( std::span<const uint32_t>( uFormats, nFormats ), outputImageflags );
+	CVulkanTexture::createFlags flags = outputImageflags;
+	std::vector<uint64_t> modifiers = GetExternalScanoutModifiers( std::span<const uint32_t>( uFormats, nFormats ), flags );
+	if ( modifiers.empty() && flags.bTransferSrc )
+	{
+		// Same fallback as the Vulkan export path: screenshots lose the
+		// direct copy, scanout keeps the GBM buffer.
+		flags.bTransferSrc = false;
+		modifiers = GetExternalScanoutModifiers( std::span<const uint32_t>( uFormats, nFormats ), flags );
+	}
 	if ( modifiers.empty() )
 	{
 		vk_log.errorf( "No modifier is scanout-capable and Vulkan-importable for all output formats" );
@@ -3688,7 +3696,7 @@ static bool vulkan_make_output_images_external( VulkanOutput_t *pOutput, const C
 		wlr_dmabuf_attributes attrs = *pScanoutBuffer->GetDmabufAttributes();
 
 		pOutput->outputImages[i] = new CVulkanTexture();
-		if ( !pOutput->outputImages[i]->BInit( uOutputWidth, uOutputHeight, 1u, pOutput->uOutputFormat, outputImageflags, &attrs, 0, 0, nullptr, nullptr, pScanoutBuffer ) )
+		if ( !pOutput->outputImages[i]->BInit( uOutputWidth, uOutputHeight, 1u, pOutput->uOutputFormat, flags, &attrs, 0, 0, nullptr, nullptr, pScanoutBuffer ) )
 			return false;
 
 		if ( bOverlay )
@@ -3702,7 +3710,7 @@ static bool vulkan_make_output_images_external( VulkanOutput_t *pOutput, const C
 			attrs.format = pOutput->uOutputFormatOverlay;
 
 			pOutput->outputImagesPartialOverlay[i] = new CVulkanTexture();
-			if ( !pOutput->outputImagesPartialOverlay[i]->BInit( uOutputWidth, uOutputHeight, 1u, pOutput->uOutputFormatOverlay, outputImageflags, &attrs, 0, 0, nullptr, nullptr, pScanoutBuffer ) )
+			if ( !pOutput->outputImagesPartialOverlay[i]->BInit( uOutputWidth, uOutputHeight, 1u, pOutput->uOutputFormatOverlay, flags, &attrs, 0, 0, nullptr, nullptr, pScanoutBuffer ) )
 				return false;
 		}
 	}
