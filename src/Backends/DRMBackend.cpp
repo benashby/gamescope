@@ -131,10 +131,10 @@ struct drm_t {
 	bool allow_modifiers;
 	struct wlr_drm_format_set formats;
 
-	// GBM device on a dup of the KMS fd, for backend-allocated scanout
-	// buffers. Buffers keep the device alive via this shared_ptr; the
-	// deleter destroys the device and closes its dup'd fd, so buffer
-	// teardown stays valid even after drm->fd itself is closed.
+	// GBM device on its own file description for the KMS device, for
+	// backend-allocated scanout buffers. Buffers keep the device alive via
+	// this shared_ptr; the deleter destroys the device and closes its fd, so
+	// buffer teardown stays valid even after drm->fd itself is closed.
 	std::shared_ptr<struct gbm_device> gbm;
 	bool bIsNvidia = false;
 
@@ -1600,10 +1600,9 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 	}
 
 #if HAVE_GBM
-	// Create the GBM device on a dup of the KMS fd so buffer teardown
-	// (gbm_bo_destroy) stays valid even after wlsession_close_kms() has
-	// closed drm->fd; textures holding GBM buffers can outlive the backend
-	// on shutdown. The deleter closes the dup'd fd after the device.
+	// The GBM device has its own fd, so buffer teardown (gbm_bo_destroy)
+	// stays valid even after wlsession_close_kms() has closed drm->fd;
+	// textures holding GBM buffers can outlive the backend on shutdown.
 	drm->gbm = gamescope::CreateGbmDevice( drm->fd );
 	if ( !drm->gbm )
 		drm_log.errorf( "GBM scanout buffers will be unavailable." );
@@ -1925,8 +1924,8 @@ void finish_drm(struct drm_t *drm)
 	drm->connectors.clear();
 
 	// Drop our reference to the GBM device. Outstanding scanout buffers
-	// keep it alive via their own references; the device owns a dup of the
-	// KMS fd, so late gbm_bo_destroy calls stay valid after
+	// keep it alive via their own references; the device owns its own fd,
+	// so late gbm_bo_destroy calls stay valid after
 	// wlsession_close_kms() below.
 	drm->gbm = nullptr;
 

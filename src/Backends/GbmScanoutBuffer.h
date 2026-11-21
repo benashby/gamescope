@@ -10,8 +10,9 @@ struct gbm_device;
 
 namespace gamescope
 {
-    // Creates a GBM device on a dup of nFd. The device owns the dup, so buffers
-    // that hold the device keep working after the caller closes nFd.
+    // Creates a GBM device on a new file description for the device behind
+    // nFd. The device owns it, so buffers that hold the device keep working
+    // after the caller closes nFd.
     std::shared_ptr<gbm_device> CreateGbmDevice( int nFd );
 
     // Allocates a scanout-capable buffer with GBM_BO_USE_SCANOUT. ulModifiers

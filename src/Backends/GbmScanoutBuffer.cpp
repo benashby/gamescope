@@ -4,6 +4,9 @@
 #include "log.hpp"
 
 #include <cinttypes>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -38,13 +41,68 @@ namespace gamescope
         wlr_dmabuf_attributes m_Attrs = {};
     };
 
+    // Returns a new DRM file description for the device behind nFd. GEM
+    // handles belong to a file description, and drm_fbid_from_dmabuf closes
+    // the handle it imports, so GBM must not share the KMS fd's handles (a
+    // dup() would). This follows wlroots' reopen_drm_node.
+    static int ReopenDrmNode( int nFd )
+    {
+        if ( drmIsMaster( nFd ) )
+        {
+            uint32_t uLesseeId = 0;
+            int nLeaseFd = drmModeCreateLease( nFd, nullptr, 0, O_CLOEXEC, &uLesseeId );
+            if ( nLeaseFd >= 0 )
+                return nLeaseFd;
+            s_GbmLog.debugf( "Empty DRM lease failed (%s), reopening the node", strerror( -nLeaseFd ) );
+        }
+
+        char *pszName = drmGetDeviceNameFromFd2( nFd );
+        if ( !pszName )
+        {
+            s_GbmLog.errorf( "Failed to get the DRM node name" );
+            return -1;
+        }
+
+        int nNewFd = open( pszName, O_RDWR | O_CLOEXEC );
+        if ( nNewFd < 0 )
+        {
+            s_GbmLog.errorf_errno( "Failed to open %s", pszName );
+            free( pszName );
+            return -1;
+        }
+        free( pszName );
+
+        // A second primary node fd may only allocate once the master
+        // authenticates it.
+        if ( drmGetNodeTypeFromFd( nNewFd ) == DRM_NODE_PRIMARY )
+        {
+            drm_magic_t uMagic = 0;
+            if ( drmGetMagic( nNewFd, &uMagic ) != 0 || drmAuthMagic( nFd, uMagic ) != 0 )
+            {
+                s_GbmLog.errorf( "Failed to authenticate the reopened DRM node" );
+                close( nNewFd );
+                return -1;
+            }
+        }
+
+        return nNewFd;
+    }
+
     std::shared_ptr<gbm_device> CreateGbmDevice( int nFd )
     {
-        int nGbmFd = dup( nFd );
+        int nGbmFd = ReopenDrmNode( nFd );
         if ( nGbmFd < 0 )
         {
-            s_GbmLog.errorf_errno( "Failed to dup fd for GBM" );
-            return nullptr;
+            // A dup shares the KMS fd's GEM handles, so gbm_bo_destroy may
+            // close a handle that was already closed or reused. Better than
+            // no GBM at all, but say so.
+            s_GbmLog.errorf( "Could not reopen the DRM node, sharing the KMS fd's GEM handles with GBM" );
+            nGbmFd = fcntl( nFd, F_DUPFD_CLOEXEC, 0 );
+            if ( nGbmFd < 0 )
+            {
+                s_GbmLog.errorf_errno( "Failed to dup fd for GBM" );
+                return nullptr;
+            }
         }
 
         gbm_device *pDevice = gbm_create_device( nGbmFd );
