@@ -135,7 +135,11 @@ struct drm_t {
 	// backend-allocated scanout buffers. Buffers keep the device alive via
 	// this shared_ptr; the deleter destroys the device and closes its fd, so
 	// buffer teardown stays valid even after drm->fd itself is closed.
+	// Created on first use while drm_gbm_scanout is on, so sessions that
+	// never enable it don't load a GBM backend. Guarded by gbmMutex.
 	std::shared_ptr<struct gbm_device> gbm;
+	bool bGbmTried = false;
+	std::mutex gbmMutex;
 	bool bIsNvidia = false;
 
 	std::vector< std::unique_ptr< gamescope::CDRMPlane > > planes;
@@ -1518,6 +1522,21 @@ gamescope_liftoff_log_handler(enum liftoff_log_priority liftoff_priority, const 
 	liftoff_log_scope.vlogf(priority, fmt, args);
 }
 
+#if HAVE_GBM
+static std::shared_ptr<struct gbm_device> drm_get_gbm_device( struct drm_t *drm )
+{
+	std::scoped_lock lock( drm->gbmMutex );
+	if ( !drm->bGbmTried )
+	{
+		drm->bGbmTried = true;
+		drm->gbm = gamescope::CreateGbmDevice( drm->fd );
+		if ( !drm->gbm )
+			drm_log.errorf( "GBM scanout buffers will be unavailable." );
+	}
+	return drm->gbm;
+}
+#endif
+
 bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 {
 	load_pnps();
@@ -1603,9 +1622,8 @@ bool init_drm(struct drm_t *drm, int width, int height, int refresh)
 	// The GBM device has its own fd, so buffer teardown (gbm_bo_destroy)
 	// stays valid even after wlsession_close_kms() has closed drm->fd;
 	// textures holding GBM buffers can outlive the backend on shutdown.
-	drm->gbm = gamescope::CreateGbmDevice( drm->fd );
-	if ( !drm->gbm )
-		drm_log.errorf( "GBM scanout buffers will be unavailable." );
+	if ( cv_drm_gbm_scanout )
+		drm_get_gbm_device( drm );
 
 	if ( drm->bIsNvidia && !cv_drm_gbm_scanout )
 	{
@@ -1927,7 +1945,14 @@ void finish_drm(struct drm_t *drm)
 	// keep it alive via their own references; the device owns its own fd,
 	// so late gbm_bo_destroy calls stay valid after
 	// wlsession_close_kms() below.
-	drm->gbm = nullptr;
+#if HAVE_GBM
+	{
+		// bGbmTried stays set: drm->fd is about to close, never reopen it.
+		std::scoped_lock lock( drm->gbmMutex );
+		drm->bGbmTried = true;
+		drm->gbm = nullptr;
+	}
+#endif
 
 
 	// Signal the page-flip handler thread to exit and join it so it won't be
@@ -4301,7 +4326,7 @@ namespace gamescope
 		virtual bool SupportsExternalScanoutBuffers() const override
 		{
 #if HAVE_GBM
-			return g_DRM.gbm != nullptr && g_DRM.allow_modifiers && cv_drm_gbm_scanout;
+			return cv_drm_gbm_scanout && g_DRM.allow_modifiers && drm_get_gbm_device( &g_DRM ) != nullptr;
 #else
 			return false;
 #endif
@@ -4310,10 +4335,11 @@ namespace gamescope
 		virtual std::shared_ptr<IBackendScanoutBuffer> CreateScanoutBuffer( uint32_t uWidth, uint32_t uHeight, uint32_t uDrmFormat, std::span<const uint64_t> ulModifiers, bool bLinear ) override
 		{
 #if HAVE_GBM
-			if ( !g_DRM.gbm )
+			std::shared_ptr<struct gbm_device> pDevice = drm_get_gbm_device( &g_DRM );
+			if ( !pDevice )
 				return nullptr;
 
-			return CreateGbmScanoutBuffer( g_DRM.gbm, uWidth, uHeight, uDrmFormat, ulModifiers, bLinear );
+			return CreateGbmScanoutBuffer( pDevice, uWidth, uHeight, uDrmFormat, ulModifiers, bLinear );
 #else
 			return nullptr;
 #endif
