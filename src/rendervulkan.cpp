@@ -2523,34 +2523,32 @@ bool CVulkanTexture::BInitInternal( uint32_t width, uint32_t height, uint32_t de
 
 			// A dmabuf import must pick a memory type from the mask
 			// vkGetMemoryFdPropertiesKHR reports for the FD, intersected
-			// with the image's memory requirements - not just any type
-			// satisfying the requirements.
+			// with the image's memory requirements. If the driver can't
+			// answer, keep the type chosen from the requirements alone, as
+			// every import did before, rather than failing client buffers.
 			VkMemoryFdPropertiesKHR fdProps = {
 				.sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
 			};
 			res = g_device.vk.GetMemoryFdPropertiesKHR( g_device.device(), VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps );
-			if ( res != VK_SUCCESS )
+			if ( res == VK_SUCCESS )
 			{
-				vk_errorf( res, "vkGetMemoryFdPropertiesKHR failed" );
-				close( fd );
-				return false;
+				const uint32_t uImportTypeBits = memRequirements.memoryTypeBits & fdProps.memoryTypeBits;
+				int32_t nImportMemoryTypeIndex = g_device.findMemoryType( properties, uImportTypeBits );
+				if ( nImportMemoryTypeIndex < 0 )
+				{
+					// Fall back to any permitted type; a valid import beats the
+					// preferred property flags.
+					nImportMemoryTypeIndex = g_device.findMemoryType( 0, uImportTypeBits );
+				}
+				if ( nImportMemoryTypeIndex >= 0 )
+					allocInfo.memoryTypeIndex = uint32_t( nImportMemoryTypeIndex );
+				else
+					vk_log.debugf( "No memory type allowed by both the image and the dmabuf, keeping %u", allocInfo.memoryTypeIndex );
 			}
-
-			const uint32_t uImportTypeBits = memRequirements.memoryTypeBits & fdProps.memoryTypeBits;
-			int32_t nImportMemoryTypeIndex = g_device.findMemoryType( properties, uImportTypeBits );
-			if ( nImportMemoryTypeIndex < 0 )
+			else
 			{
-				// Fall back to any permitted type; a valid import beats the
-				// preferred property flags.
-				nImportMemoryTypeIndex = g_device.findMemoryType( 0, uImportTypeBits );
+				vk_log.debugf( "vkGetMemoryFdPropertiesKHR failed (%d), keeping memory type %u", int( res ), allocInfo.memoryTypeIndex );
 			}
-			if ( nImportMemoryTypeIndex < 0 )
-			{
-				vk_log.errorf( "No compatible memory type for dmabuf import" );
-				close( fd );
-				return false;
-			}
-			allocInfo.memoryTypeIndex = uint32_t( nImportMemoryTypeIndex );
 
 			// Memory already provided by pDMA
 			importMemoryInfo = {
