@@ -117,6 +117,22 @@ namespace gamescope
         return std::shared_ptr<gbm_device>( pDevice, [ nGbmFd ]( gbm_device *pDevice ){ gbm_device_destroy( pDevice ); close( nGbmFd ); } );
     }
 
+    // NVIDIA's GBM refuses GBM_BO_USE_RENDERING together with
+    // GBM_BO_USE_LINEAR at every size, while SCANOUT | LINEAR succeeds. The
+    // rendering flag only matters to a GL user of the bo; gamescope imports
+    // it into Vulkan and draws there, so retry without it. Without the retry
+    // every linear buffer, the cursor among them, fell back to a Vulkan
+    // allocation on the cursor plane next to GBM-allocated primaries, which
+    // wedged the display engine on a 3090 Ti: flip timeouts, then
+    // "Error while waiting for GPU progress".
+    static gbm_bo *CreateLinearBo( gbm_device *pDevice, uint32_t uWidth, uint32_t uHeight, uint32_t uDrmFormat, uint32_t uFlags )
+    {
+        gbm_bo *pBo = gbm_bo_create( pDevice, uWidth, uHeight, uDrmFormat, uFlags | GBM_BO_USE_LINEAR );
+        if ( !pBo && ( uFlags & GBM_BO_USE_RENDERING ) )
+            pBo = gbm_bo_create( pDevice, uWidth, uHeight, uDrmFormat, ( uFlags & ~GBM_BO_USE_RENDERING ) | GBM_BO_USE_LINEAR );
+        return pBo;
+    }
+
     std::shared_ptr<IBackendScanoutBuffer> CreateGbmScanoutBuffer( const std::shared_ptr<gbm_device> &pDevice, uint32_t uWidth, uint32_t uHeight, uint32_t uDrmFormat, std::span<const uint64_t> ulModifiers, bool bLinear )
     {
         if ( !pDevice )
@@ -130,7 +146,7 @@ namespace gamescope
         {
             // GBM rejects GBM_BO_USE_LINEAR combined with an explicit
             // modifier list (EINVAL in Mesa), so allocate directly.
-            pBo = gbm_bo_create( pDevice.get(), uWidth, uHeight, uDrmFormat, uFlags | GBM_BO_USE_LINEAR );
+            pBo = CreateLinearBo( pDevice.get(), uWidth, uHeight, uDrmFormat, uFlags );
             bForceLinearModifier = true;
         }
         else if ( !ulModifiers.empty() )
@@ -142,7 +158,7 @@ namespace gamescope
             // allocation with GBM_BO_USE_LINEAR is equivalent.
             if ( !pBo && ulModifiers.size() == 1 && ulModifiers[0] == DRM_FORMAT_MOD_LINEAR )
             {
-                pBo = gbm_bo_create( pDevice.get(), uWidth, uHeight, uDrmFormat, uFlags | GBM_BO_USE_LINEAR );
+                pBo = CreateLinearBo( pDevice.get(), uWidth, uHeight, uDrmFormat, uFlags );
                 bForceLinearModifier = true;
             }
         }
